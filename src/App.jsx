@@ -61,6 +61,92 @@ function density(arr) {
 }
 
 // =============================================================================
+// AWARE CA — cells with memory (can see their S' value)
+// =============================================================================
+
+// Extended rule: 4-bit input (left, center, right, didChange) → 16-bit rule number
+function awareRuleToDict(ruleNumber) {
+  const binary = BigInt(ruleNumber).toString(2).padStart(16, '0').split('').reverse()
+  const dict = {}
+  for (let l = 0; l < 2; l++) {
+    for (let c = 0; c < 2; c++) {
+      for (let r = 0; r < 2; r++) {
+        for (let d = 0; d < 2; d++) { // d = "did I change last step?"
+          const idx = 8 * l + 4 * c + 2 * r + d
+          dict[`${l}${c}${r}${d}`] = parseInt(binary[idx])
+        }
+      }
+    }
+  }
+  return dict
+}
+
+// Apply aware rule: cells see their previous S' (change) value
+function applyAwareRule(state, prevDerivative, ruleDict) {
+  const n = state.length
+  const newState = new Uint8Array(n)
+  for (let i = 0; i < n; i++) {
+    const left = state[(i - 1 + n) % n]
+    const center = state[i]
+    const right = state[(i + 1) % n]
+    const didChange = prevDerivative ? prevDerivative[i] : 0
+    newState[i] = ruleDict[`${left}${center}${right}${didChange}`]
+  }
+  return newState
+}
+
+// Evolve aware CA and track derivative history
+function evolveAware(state, prevDeriv, ruleDict) {
+  const next = applyAwareRule(state, prevDeriv, ruleDict)
+  const deriv = state.map((v, i) => v ^ next[i])
+  return { next, deriv }
+}
+
+// Groovy commutator for aware CA (more complex - derivative depends on prev derivative)
+function groovyCommutatorAware(state, prevDeriv, ruleDict) {
+  // This is trickier because the aware rule depends on history
+  // For now, compute it assuming the prevDeriv stays constant for both paths
+  const { next: Es, deriv: D_at_s } = evolveAware(state, prevDeriv, ruleDict)
+  
+  // Path 1: evolve, then check what would change
+  const { deriv: D_Es } = evolveAware(Es, D_at_s, ruleDict)
+  
+  // Path 2: apply derivative mask, then evolve
+  const Ds = state.map((v, i) => v ^ D_at_s[i])
+  const { deriv: afterDs } = evolveAware(Ds, D_at_s, ruleDict)
+  const E_Ds = Ds.map((v, i) => v ^ afterDs[i])
+  const D_E_Ds = E_Ds.map((v, i) => v ^ afterDs[i]) // derivative after that step
+  
+  return D_Es.map((v, i) => v ^ D_E_Ds[i])
+}
+
+// Generate interesting aware rules by extending standard rules
+function standardToAwareRule(rule8bit, memoryBehavior = 'ignore') {
+  // memoryBehavior: 'ignore' = same as standard, 'invert' = flip if changed, 'stabilize' = stay if changed
+  let rule16 = 0n
+  const dict = ruleToDict(rule8bit)
+  
+  for (let l = 0; l < 2; l++) {
+    for (let c = 0; c < 2; c++) {
+      for (let r = 0; r < 2; r++) {
+        const baseResult = dict[`${l}${c}${r}`]
+        for (let d = 0; d < 2; d++) {
+          let result = baseResult
+          if (d === 1) { // cell changed last step
+            if (memoryBehavior === 'invert') result = 1 - result
+            else if (memoryBehavior === 'stabilize') result = c // stay same
+            else if (memoryBehavior === 'excite') result = 1 // become/stay active
+          }
+          const idx = 8 * l + 4 * c + 2 * r + d
+          if (result) rule16 |= (1n << BigInt(idx))
+        }
+      }
+    }
+  }
+  return Number(rule16)
+}
+
+// =============================================================================
 // 2D CA (Game of Life style)
 // =============================================================================
 
@@ -185,6 +271,11 @@ export default function App() {
   const [steps, setSteps] = useState(150)
   const [running, setRunning] = useState(false)
   
+  // Aware CA settings
+  const [awareMode, setAwareMode] = useState(false)
+  const [memoryBehavior, setMemoryBehavior] = useState('ignore')
+  const [awareRule, setAwareRule] = useState(null) // computed from rule + behavior
+  
   // 1D state
   const [history, setHistory] = useState([])
   const [derivHistory, setDerivHistory] = useState([])
@@ -231,29 +322,54 @@ export default function App() {
     return g
   }, [grid2DSize])
   
-  // Run 1D CA
+  // Run 1D CA (standard or aware)
   const run1D = useCallback((initial) => {
-    const ruleDict = ruleToDict(rule)
     const hist = [initial]
     const dHist = []
     const gHist = []
     
     let state = initial
+    let prevDeriv = null
     let totalRho = 0
     let totalGroovy = 0
     
-    for (let i = 0; i < steps; i++) {
-      const D = derivative(state, ruleDict)
-      const G = groovyCommutator(state, ruleDict)
+    if (awareMode) {
+      // Aware CA: cells see their S' from previous step
+      const rule16 = standardToAwareRule(rule, memoryBehavior)
+      setAwareRule(rule16)
+      const awareDict = awareRuleToDict(rule16)
       
-      dHist.push(D)
-      gHist.push(G)
+      for (let i = 0; i < steps; i++) {
+        const { next, deriv } = evolveAware(state, prevDeriv, awareDict)
+        const G = groovyCommutatorAware(state, prevDeriv, awareDict)
+        
+        dHist.push(deriv)
+        gHist.push(G)
+        
+        totalRho += density(deriv)
+        totalGroovy += density(G)
+        
+        prevDeriv = deriv
+        state = next
+        hist.push(state)
+      }
+    } else {
+      // Standard CA
+      const ruleDict = ruleToDict(rule)
       
-      totalRho += density(D)
-      totalGroovy += density(G)
-      
-      state = evolve(state, ruleDict)
-      hist.push(state)
+      for (let i = 0; i < steps; i++) {
+        const D = derivative(state, ruleDict)
+        const G = groovyCommutator(state, ruleDict)
+        
+        dHist.push(D)
+        gHist.push(G)
+        
+        totalRho += density(D)
+        totalGroovy += density(G)
+        
+        state = evolve(state, ruleDict)
+        hist.push(state)
+      }
     }
     
     setHistory(hist)
@@ -263,7 +379,7 @@ export default function App() {
       rho: totalRho / steps,
       groovyDensity: totalGroovy / steps
     })
-  }, [rule, steps])
+  }, [rule, steps, awareMode, memoryBehavior])
   
   // Draw 1D
   useEffect(() => {
@@ -359,11 +475,47 @@ export default function App() {
             </button>
           </div>
           
+          <div className="controls" style={{marginTop: '0.5rem'}}>
+            <div className="control-group">
+              <label style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                <input 
+                  type="checkbox" 
+                  checked={awareMode}
+                  onChange={e => setAwareMode(e.target.checked)}
+                />
+                🧠 Aware Mode (cells see S')
+              </label>
+            </div>
+            {awareMode && (
+              <div className="control-group">
+                <label>Memory Behavior</label>
+                <select 
+                  value={memoryBehavior} 
+                  onChange={e => setMemoryBehavior(e.target.value)}
+                >
+                  <option value="ignore">Ignore (same as standard)</option>
+                  <option value="stabilize">Stabilize (if changed, stay put)</option>
+                  <option value="invert">Invert (if changed, flip decision)</option>
+                  <option value="excite">Excite (if changed, become active)</option>
+                </select>
+              </div>
+            )}
+            {awareMode && awareRule !== null && (
+              <div className="control-group">
+                <span style={{fontSize: '0.8rem', opacity: 0.7}}>
+                  16-bit rule: {awareRule}
+                </span>
+              </div>
+            )}
+          </div>
+          
           <div className="info">
-            <strong>Rule {rule}</strong> — 
-            Known Class IV: 110, 124, 137, 193 (complex), 54, 147 (complex). 
-            Try Class III (chaotic): 30, 45, 60, 90. 
-            Try Class I/II (trivial): 0, 4, 32, 51.
+            <strong>Rule {rule}{awareMode ? ` → Aware (${memoryBehavior})` : ''}</strong> — 
+            {awareMode ? (
+              <>Cells see whether they changed last step. Try different memory behaviors!</>
+            ) : (
+              <>Known Class IV: 110, 124, 137, 193. Class III (chaotic): 30, 45, 60, 90. Class I/II: 0, 4, 32, 51.</>
+            )}
           </div>
           
           <div className="canvases">

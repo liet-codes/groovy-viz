@@ -56,6 +56,14 @@ function groovyCommutator(state, ruleDict) {
   return D_Es.map((v, i) => v ^ E_Ds[i])
 }
 
+// G²(s) = G(G(s)) = second-order groovy commutator
+// Treating the groovy commutator output as a new state and computing its groove
+// "The grooviness of the groove" — how non-commutativity itself is non-commutative
+function groovyCommutator2(state, ruleDict) {
+  const G = groovyCommutator(state, ruleDict)
+  return groovyCommutator(G, ruleDict)
+}
+
 function density(arr) {
   return arr.reduce((a, b) => a + b, 0) / arr.length
 }
@@ -259,6 +267,7 @@ function draw2D(canvas, grid, colorFn) {
 const stateColor = v => v ? [255, 255, 255] : [10, 10, 15]
 const derivColor = v => v ? [255, 107, 107] : [10, 10, 15]
 const groovyColor = v => v ? [0, 212, 170] : [10, 10, 15]
+const groovy2Color = v => v ? [147, 112, 219] : [10, 10, 15] // purple for G²
 
 // =============================================================================
 // APP
@@ -280,7 +289,8 @@ export default function App() {
   const [history, setHistory] = useState([])
   const [derivHistory, setDerivHistory] = useState([])
   const [groovyHistory, setGroovyHistory] = useState([])
-  const [metrics, setMetrics] = useState({ rho: 0, groovyDensity: 0 })
+  const [groovy2History, setGroovy2History] = useState([])
+  const [metrics, setMetrics] = useState({ rho: 0, groovyDensity: 0, groovy2Density: 0 })
   
   // 2D state
   const [grid, setGrid] = useState(null)
@@ -292,6 +302,7 @@ export default function App() {
   const stateCanvas = useRef(null)
   const derivCanvas = useRef(null)
   const groovyCanvas = useRef(null)
+  const groovy2Canvas = useRef(null)
   const state2DCanvas = useRef(null)
   const groovy2DCanvas = useRef(null)
   
@@ -327,11 +338,13 @@ export default function App() {
     const hist = [initial]
     const dHist = []
     const gHist = []
+    const g2Hist = []
     
     let state = initial
     let prevDeriv = null
     let totalRho = 0
     let totalGroovy = 0
+    let totalGroovy2 = 0
     
     if (awareMode) {
       // Aware CA: cells see their S' from previous step
@@ -342,12 +355,17 @@ export default function App() {
       for (let i = 0; i < steps; i++) {
         const { next, deriv } = evolveAware(state, prevDeriv, awareDict)
         const G = groovyCommutatorAware(state, prevDeriv, awareDict)
+        // For aware mode, G² uses standard rule on the G output
+        const ruleDict = ruleToDict(rule)
+        const G2 = groovyCommutator(G, ruleDict)
         
         dHist.push(deriv)
         gHist.push(G)
+        g2Hist.push(G2)
         
         totalRho += density(deriv)
         totalGroovy += density(G)
+        totalGroovy2 += density(G2)
         
         prevDeriv = deriv
         state = next
@@ -360,12 +378,15 @@ export default function App() {
       for (let i = 0; i < steps; i++) {
         const D = derivative(state, ruleDict)
         const G = groovyCommutator(state, ruleDict)
+        const G2 = groovyCommutator2(state, ruleDict)
         
         dHist.push(D)
         gHist.push(G)
+        g2Hist.push(G2)
         
         totalRho += density(D)
         totalGroovy += density(G)
+        totalGroovy2 += density(G2)
         
         state = evolve(state, ruleDict)
         hist.push(state)
@@ -375,9 +396,11 @@ export default function App() {
     setHistory(hist)
     setDerivHistory(dHist)
     setGroovyHistory(gHist)
+    setGroovy2History(g2Hist)
     setMetrics({
       rho: totalRho / steps,
-      groovyDensity: totalGroovy / steps
+      groovyDensity: totalGroovy / steps,
+      groovy2Density: totalGroovy2 / steps
     })
   }, [rule, steps, awareMode, memoryBehavior])
   
@@ -387,8 +410,9 @@ export default function App() {
       drawCA1D(stateCanvas.current, history, stateColor)
       drawCA1D(derivCanvas.current, derivHistory, derivColor)
       drawCA1D(groovyCanvas.current, groovyHistory, groovyColor)
+      drawCA1D(groovy2Canvas.current, groovy2History, groovy2Color)
     }
-  }, [mode, history, derivHistory, groovyHistory])
+  }, [mode, history, derivHistory, groovyHistory, groovy2History])
   
   // Draw 2D
   useEffect(() => {
@@ -531,6 +555,10 @@ export default function App() {
               <h3>Groovy Commutator G(S) = D(E(S)) ⊕ E(D(S))</h3>
               <canvas ref={groovyCanvas} />
             </div>
+            <div className="canvas-container">
+              <h3>Second-Order G²(S) = G(G(S))</h3>
+              <canvas ref={groovy2Canvas} />
+            </div>
           </div>
         </>
       )}
@@ -607,7 +635,11 @@ export default function App() {
         </div>
         <div className="metric">
           <div className="metric-value">{metrics.groovyDensity.toFixed(4)}</div>
-          <div className="metric-label">Groovy Density</div>
+          <div className="metric-label">G Density</div>
+        </div>
+        <div className="metric">
+          <div className="metric-value">{(metrics.groovy2Density || 0).toFixed(4)}</div>
+          <div className="metric-label">G² Density</div>
         </div>
       </div>
       
@@ -616,9 +648,11 @@ export default function App() {
         <p><strong>Derivative (Change Mask):</strong> <span className="formula">D(S) = S ⊕ φ(S)</span> — cells that will flip</p>
         <p><strong>Evolution:</strong> <span className="formula">E(S) = S ⊕ D(S)</span> — applying the changes</p>
         <p><strong>Groovy Commutator:</strong> <span className="formula">G(S) = D(E(S)) ⊕ E(D(S))</span></p>
+        <p><strong>Second-Order:</strong> <span className="formula">G²(S) = G(G(S))</span> — the grooviness of the groove</p>
         <p style={{marginTop: '1em'}}>
           When G(S) = 0, differentiation and evolution commute — the system is "transparent to scale."<br/>
-          When G(S) ≠ 0 with <em>structure</em>, you're at the edge of chaos. That's the signature of aliveness.
+          When G(S) ≠ 0 with <em>structure</em>, you're at the edge of chaos. That's the signature of aliveness.<br/>
+          G² measures how the non-commutativity pattern itself behaves under the same operations.
         </p>
       </div>
     </div>

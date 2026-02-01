@@ -1,0 +1,17 @@
+spores: 1
+
+vision: |
+  Visualize the Groovy Commutator — a measure of non-commutativity in
+  cellular automata dynamics. When evolve-then-differentiate differs
+  from differentiate-then-evolve, you're at the edge of chaos. Class IV
+  territory. The fingerprint of aliveness.
+
+tags:
+  - status:active
+  - lang:javascript
+  - type:site
+  - cellular-automata
+  - visualization
+  - complexity
+  - edge-of-chaos
+  - mathematics

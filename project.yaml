@@ -1,0 +1,17 @@
+name: groovy-viz
+tagline: Audio-reactive visual experiments
+description: |
+  Browser-based audio visualizer that responds to music in real time.
+  Built with Web Audio API and Canvas.
+status: shipped
+repo: https://github.com/liet-codes/groovy-viz
+live_url: https://liet-codes.github.io/groovy-viz
+docs_url: null
+stack:
+  languages: [javascript, html, css]
+  frameworks: []
+tags: [creative, audio, visualization]
+collaborators_wanted:
+  open: false
+  description: null
+relationships: []
